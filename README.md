@@ -119,25 +119,13 @@ This server provides tools for accessing and managing all aspects of your Garmin
 - `query_garmin_graphql(query)` - Query Garmin GraphQL endpoints
 - `logout()` - Log user out of session
 
-## Getting Started
-
-### Prerequisites
-- Python 3.8+
-- Garmin Connect account
-
-### Installation
-1. Clone this repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Update the email and password in `echo.py` with your Garmin Connect credentials
-4. Run the server: `python echo.py`
-
 ### Usage
 The server will start and be available for MCP clients to connect to. All tools are automatically available and can be called with appropriate parameters.
 
 ## Configuration
-Update the following variables in `echo.py`:
-- `email`: Your Garmin Connect email
-- `password`: Your Garmin Connect password
+Update the following variables in a .env:
+- `GARMIN_EMAIL`: Your Garmin Connect email
+- `GARMIN_PASSWORD`: Your Garmin Connect password
 
 ## Notes
 - The server uses the Garmin Connect Python library for authentication and data access
@@ -145,7 +133,3 @@ Update the following variables in `echo.py`:
 - Activity IDs can be obtained from the activity list methods
 - Some methods may require specific device types or data availability
 
-## Learn More
-- [FastMCP Documentation](https://github.com/jlowin/fastmcp)
-- [MCP Protocol](https://modelcontextprotocol.io/)
-- [Garmin Connect Python Library](https://github.com/cyberjunky/python-garminconnect)
