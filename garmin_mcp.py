@@ -11,6 +11,7 @@ app = FastMCP("Echo Server")
 Activity Management functions for Garmin Connect MCP Server
 """
 import datetime
+import json
 from typing import Any, Dict, List, Optional, Union
 from garminconnect import Garmin
 from dotenv import load_dotenv
@@ -24,9 +25,71 @@ garmin_client = Garmin(email, password)
 garmin_client.login()
 
 
+def _ensure_string(data: Any) -> str:
+    """Serialize non-string data to a compact JSON string."""
+    if isinstance(data, str):
+        return data
+    try:
+        return json.dumps(data, separators=(",", ":"))
+    except Exception:
+        # Fallback to str() to avoid output validation errors
+        return str(data)
+
+
+def _trim_activity_record(record: Dict[str, Any], *, minimal: bool = True, fields: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Return a trimmed activity dict.
+
+    - If fields is provided, only include those keys when present.
+    - Else if minimal is True, include a sensible subset.
+    - Otherwise return the record unchanged.
+    """
+    if fields:
+        return {k: record.get(k) for k in fields if k in record}
+    if not minimal:
+        return record
+    # Default minimal fields commonly needed by LLMs
+    default_keys = [
+        "activityId",
+        "activityName",
+        "activityTypeDTO",
+        "eventTypeDTO",
+        "locationName",
+        "summaryDTO",
+    ]
+    trimmed: Dict[str, Any] = {k: record.get(k) for k in default_keys if k in record}
+    # Further trim nested structures
+    atype = trimmed.get("activityTypeDTO")
+    if isinstance(atype, dict):
+        trimmed["activityTypeDTO"] = {k: atype.get(k) for k in ("typeKey", "parentTypeId") if k in atype}
+    etype = trimmed.get("eventTypeDTO")
+    if isinstance(etype, dict):
+        trimmed["eventTypeDTO"] = {k: etype.get(k) for k in ("typeKey",) if k in etype}
+    summary = trimmed.get("summaryDTO")
+    if isinstance(summary, dict):
+        keep = [
+            "startTimeLocal",
+            "distance",
+            "duration",
+            "averageSpeed",
+            "calories",
+            "averageHR",
+            "maxHR",
+            "steps",
+        ]
+        trimmed["summaryDTO"] = {k: summary.get(k) for k in keep if k in summary}
+    return trimmed
+
+
+def _trim_activities_list(items: Any, *, limit: int = 50, minimal: bool = True, fields: Optional[List[str]] = None) -> Any:
+    """Trim a list (or iterable) of activity records."""
+    if not isinstance(items, list):
+        return items
+    trimmed = [_trim_activity_record(item, minimal=minimal, fields=fields) if isinstance(item, dict) else item for item in items[: max(limit, 0)]]
+    return trimmed
+
     
 @app.tool()
-async def get_activities_by_date(start_date: str, end_date: str, activity_type: str = "") -> str:
+async def get_activities_by_date(start_date: str, end_date: str, activity_type: str = "", limit: int = 50, minimal: bool = True, fields: List[str] | None = None) -> str:
     """Get activities data between specified dates, optionally filtered by activity type
     
     Args:
@@ -39,13 +102,13 @@ async def get_activities_by_date(start_date: str, end_date: str, activity_type: 
         if not activities:
             return f"No activities found between {start_date} and {end_date}" + \
                     (f" for activity type '{activity_type}'" if activity_type else "")
-        
-        return activities
+        activities = _trim_activities_list(activities, limit=limit, minimal=minimal, fields=fields)
+        return _ensure_string(activities)
     except Exception as e:
         return f"Error retrieving activities by date: {str(e)}"
 
 @app.tool()
-async def get_activities_fordate(date: str) -> str:
+async def get_activities_fordate(date: str, limit: int = 50, minimal: bool = True, fields: List[str] | None = None) -> str:
     """Get activities for a specific date
     
     Args:
@@ -55,13 +118,13 @@ async def get_activities_fordate(date: str) -> str:
         activities = garmin_client.get_activities_fordate(date)
         if not activities:
             return f"No activities found for {date}"
-        
-        return activities
+        activities = _trim_activities_list(activities, limit=limit, minimal=minimal, fields=fields)
+        return _ensure_string(activities)
     except Exception as e:
         return f"Error retrieving activities for date: {str(e)}"
 
 @app.tool()
-async def get_activity(activity_id: int) -> str:
+async def get_activity(activity_id: int, minimal: bool = True, fields: List[str] | None = None) -> str:
     """Get basic activity information
     
     Args:
@@ -71,8 +134,9 @@ async def get_activity(activity_id: int) -> str:
         activity = garmin_client.get_activity(activity_id)
         if not activity:
             return f"No activity found with ID {activity_id}"
-        
-        return activity
+        if isinstance(activity, dict):
+            activity = _trim_activity_record(activity, minimal=minimal, fields=fields)
+        return _ensure_string(activity)
     except Exception as e:
         return f"Error retrieving activity: {str(e)}"
 
@@ -190,13 +254,14 @@ async def get_activity_exercise_sets(activity_id: int) -> str:
     
 
 @app.tool()
-async def get_recent_activities() -> str:
+async def get_recent_activities(limit: int = 20, minimal: bool = True, fields: List[str] | None = None) -> str:
     """Get recent activities"""
     try:
         activities = garmin_client.get_activities()
         if not activities:
             return "No recent activities found"
-        return activities
+        activities = _trim_activities_list(activities, limit=limit, minimal=minimal, fields=fields)
+        return _ensure_string(activities)
     except Exception as e:
         return f"Error retrieving recent activities: {str(e)}"
 
@@ -1079,16 +1144,18 @@ async def get_progress_summary_between_dates(startdate: str, enddate: str, metri
 
 # Activity Management and Upload/Download
 @app.tool()
-async def get_last_activity() -> str:
+async def get_last_activity(minimal: bool = True, fields: List[str] | None = None) -> str:
     """Get the last activity"""
     try:
         activity = garmin_client.get_last_activity()
-        return activity
+        if isinstance(activity, dict):
+            activity = _trim_activity_record(activity, minimal=minimal, fields=fields)
+        return _ensure_string(activity)
     except Exception as e:
         return f"Error retrieving last activity: {str(e)}"
 
 @app.tool()
-async def get_activity_details(activity_id: int, maxchart: int = 2000, maxpoly: int = 4000) -> str:
+async def get_activity_details(activity_id: int, maxchart: int = 2000, maxpoly: int = 4000, minimal: bool = True) -> str:
     """Get detailed activity information
     
     Args:
@@ -1098,7 +1165,12 @@ async def get_activity_details(activity_id: int, maxchart: int = 2000, maxpoly: 
     """
     try:
         details = garmin_client.get_activity_details(activity_id, maxchart, maxpoly)
-        return details
+        if minimal and isinstance(details, dict):
+            # Keep only top-level keys that are most useful; drop heavy series if present
+            keep = ["summaryDTO", "activityId", "activityName", "activityTypeDTO", "eventTypeDTO", "locationName"]
+            trimmed = {k: details.get(k) for k in keep if k in details}
+            return _ensure_string(_trim_activity_record(trimmed, minimal=True))
+        return _ensure_string(details)
     except Exception as e:
         return f"Error retrieving activity details: {str(e)}"
 
