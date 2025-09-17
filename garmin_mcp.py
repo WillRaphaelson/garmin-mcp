@@ -12,6 +12,7 @@ Activity Management functions for Garmin Connect MCP Server
 """
 import datetime
 import json
+import inspect
 from typing import Any, Dict, List, Optional, Union
 from garminconnect import Garmin
 from dotenv import load_dotenv
@@ -24,6 +25,27 @@ password = os.getenv("GARMIN_PASSWORD")
 garmin_client = Garmin(email, password)
 garmin_client.login()
 
+
+# Auto-stringify all tool outputs globally by wrapping the tool decorator
+_orig_tool_decorator = app.tool
+
+def _stringifying_tool_decorator(*decorator_args, **decorator_kwargs):
+    register_tool = _orig_tool_decorator(*decorator_args, **decorator_kwargs)
+
+    def _decorator(func):
+        async def _wrapped(*args, **kwargs):
+            result = func(*args, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+            return _ensure_string(result)
+
+        _wrapped.__name__ = getattr(func, "__name__", "wrapped_tool")
+        _wrapped.__doc__ = func.__doc__
+        return register_tool(_wrapped)
+
+    return _decorator
+
+app.tool = _stringifying_tool_decorator
 
 def _ensure_string(data: Any) -> str:
     """Serialize non-string data to a compact JSON string."""
