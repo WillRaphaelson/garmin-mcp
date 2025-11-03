@@ -1047,6 +1047,268 @@ async def download_workout(workout_id: int) -> str:
         return f"Error downloading workout: {str(e)}"
 
 @app.tool()
+async def get_scheduled_workouts(start_date: str, end_date: str) -> str:
+    """Get scheduled workouts from calendar between specified dates
+    
+    Args:
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+    """
+    try:
+        query = {
+            "query": f'query{{workoutScheduleSummariesScalar(startDate:"{start_date}", endDate:"{end_date}")}}'
+        }
+        result = garmin_client.query_garmin_graphql(query)
+        return result
+    except Exception as e:
+        return f"Error retrieving scheduled workouts: {str(e)}"
+
+@app.tool()
+async def create_and_schedule_workout(
+    workout_name: str,
+    scheduled_date: str,
+    activity_type: str = "running",
+    scheduled_time: str = None,
+    distance_meters: float = None,
+    duration_seconds: int = None,
+    laps: int = None,
+    lap_distance_meters: float = None,
+    lap_duration_seconds: int = None,
+    warmup_distance_meters: float = None,
+    warmup_duration_seconds: int = None,
+    cooldown_distance_meters: float = None,
+    cooldown_duration_seconds: int = None,
+    target_pace_seconds_per_km: float = None,
+    target_heart_rate_bpm: int = None,
+    intervals: List[Dict[str, Any]] = None
+) -> str:
+    """Create a workout with custom parameters and schedule it to the calendar
+    
+    Args:
+        workout_name: Name of the workout
+        scheduled_date: Date to schedule the workout (YYYY-MM-DD format)
+        activity_type: Type of activity (running, cycling, swimming, etc.) (default: running)
+        scheduled_time: Optional time to schedule the workout (HH:MM format, e.g., "09:00")
+        distance_meters: Total distance in meters (optional)
+        duration_seconds: Total duration in seconds (optional)
+        laps: Number of laps/intervals (optional)
+        lap_distance_meters: Distance per lap in meters (optional, for interval workouts)
+        lap_duration_seconds: Duration per lap in seconds (optional, for interval workouts)
+        warmup_distance_meters: Warmup distance in meters (optional)
+        warmup_duration_seconds: Warmup duration in seconds (optional)
+        cooldown_distance_meters: Cooldown distance in meters (optional)
+        cooldown_duration_seconds: Cooldown duration in seconds (optional)
+        target_pace_seconds_per_km: Target pace in seconds per kilometer (optional)
+        target_heart_rate_bpm: Target heart rate in BPM (optional)
+        intervals: List of interval dictionaries with keys: distance_meters, duration_seconds, 
+                   target_pace, target_hr, rest_distance, rest_duration (optional, for complex workouts)
+    """
+    try:
+        # Build workout JSON structure
+        workout_steps = []
+        
+        # Add warmup if specified
+        if warmup_distance_meters or warmup_duration_seconds:
+            warmup_step = {
+                "type": "WarmUp",
+                "duration": {}
+            }
+            if warmup_distance_meters:
+                warmup_step["duration"]["distance"] = warmup_distance_meters
+            if warmup_duration_seconds:
+                warmup_step["duration"]["duration"] = warmup_duration_seconds
+            if target_pace_seconds_per_km:
+                warmup_step["targetType"] = "pace"
+                warmup_step["targetValue"] = target_pace_seconds_per_km
+            if target_heart_rate_bpm:
+                warmup_step["targetType"] = "heartRate"
+                warmup_step["targetValue"] = target_heart_rate_bpm
+            workout_steps.append(warmup_step)
+        
+        # Add intervals/laps if specified
+        if intervals:
+            # Custom intervals provided
+            for interval in intervals:
+                interval_step = {
+                    "type": "Interval",
+                    "duration": {}
+                }
+                if "distance_meters" in interval:
+                    interval_step["duration"]["distance"] = interval["distance_meters"]
+                if "duration_seconds" in interval:
+                    interval_step["duration"]["duration"] = interval["duration_seconds"]
+                if "target_pace" in interval:
+                    interval_step["targetType"] = "pace"
+                    interval_step["targetValue"] = interval["target_pace"]
+                if "target_hr" in interval:
+                    interval_step["targetType"] = "heartRate"
+                    interval_step["targetValue"] = interval["target_hr"]
+                workout_steps.append(interval_step)
+                
+                # Add rest/recovery if specified
+                if "rest_distance" in interval or "rest_duration" in interval:
+                    rest_step = {
+                        "type": "Rest",
+                        "duration": {}
+                    }
+                    if "rest_distance" in interval:
+                        rest_step["duration"]["distance"] = interval["rest_distance"]
+                    if "rest_duration" in interval:
+                        rest_step["duration"]["duration"] = interval["rest_duration"]
+                    workout_steps.append(rest_step)
+        elif laps and (lap_distance_meters or lap_duration_seconds):
+            # Simple interval workout with laps
+            for i in range(laps):
+                lap_step = {
+                    "type": "Interval",
+                    "duration": {}
+                }
+                if lap_distance_meters:
+                    lap_step["duration"]["distance"] = lap_distance_meters
+                if lap_duration_seconds:
+                    lap_step["duration"]["duration"] = lap_duration_seconds
+                if target_pace_seconds_per_km:
+                    lap_step["targetType"] = "pace"
+                    lap_step["targetValue"] = target_pace_seconds_per_km
+                if target_heart_rate_bpm:
+                    lap_step["targetType"] = "heartRate"
+                    lap_step["targetValue"] = target_heart_rate_bpm
+                workout_steps.append(lap_step)
+                
+                # Add rest between laps (except after last lap)
+                if i < laps - 1:
+                    rest_step = {"type": "Rest", "duration": {"duration": 60}}  # 60 second rest
+                    workout_steps.append(rest_step)
+        
+        # Add main workout step if no intervals specified
+        if not intervals and not (laps and (lap_distance_meters or lap_duration_seconds)):
+            main_step = {
+                "type": "Work",
+                "duration": {}
+            }
+            if distance_meters:
+                main_step["duration"]["distance"] = distance_meters
+            if duration_seconds:
+                main_step["duration"]["duration"] = duration_seconds
+            if target_pace_seconds_per_km:
+                main_step["targetType"] = "pace"
+                main_step["targetValue"] = target_pace_seconds_per_km
+            if target_heart_rate_bpm:
+                main_step["targetType"] = "heartRate"
+                main_step["targetValue"] = target_heart_rate_bpm
+            workout_steps.append(main_step)
+        
+        # Add cooldown if specified
+        if cooldown_distance_meters or cooldown_duration_seconds:
+            cooldown_step = {
+                "type": "CoolDown",
+                "duration": {}
+            }
+            if cooldown_distance_meters:
+                cooldown_step["duration"]["distance"] = cooldown_distance_meters
+            if cooldown_duration_seconds:
+                cooldown_step["duration"]["duration"] = cooldown_duration_seconds
+            workout_steps.append(cooldown_step)
+        
+        # Build the workout JSON payload
+        workout_json = {
+            "workoutName": workout_name,
+            "sportType": {
+                "sportTypeKey": activity_type
+            },
+            "workoutSteps": workout_steps
+        }
+        
+        # Create the workout
+        url = f"{garmin_client.garmin_workouts}/workout"
+        result = garmin_client.garth.post("connectapi", url, json=workout_json, api=True)
+        
+        # Extract workout ID from result
+        if isinstance(result, dict) and "workoutId" in result:
+            workout_id = result["workoutId"]
+        elif isinstance(result, dict) and "id" in result:
+            workout_id = result["id"]
+        else:
+            # Try to get the workout ID from the response
+            workout_id = result if isinstance(result, (int, str)) else None
+        
+        if not workout_id:
+            return f"Workout created but could not extract workout ID. Response: {result}"
+        
+        # Schedule the workout
+        schedule_url = f"/workout-service/schedule/{workout_id}"
+        schedule_payload = {"scheduledDate": scheduled_date}
+        if scheduled_time:
+            schedule_payload["scheduledTime"] = scheduled_time
+        
+        schedule_result = garmin_client.garth.request(
+            "POST",
+            "connectapi",
+            schedule_url,
+            json=schedule_payload,
+            api=True
+        )
+        
+        return f"Successfully created and scheduled workout '{workout_name}' (ID: {workout_id}) for {scheduled_date}" + (f" at {scheduled_time}" if scheduled_time else "")
+    except Exception as e:
+        return f"Error creating and scheduling workout: {str(e)}"
+
+@app.tool()
+async def schedule_workout(workout_id: int, scheduled_date: str, scheduled_time: str = None) -> str:
+    """Schedule a workout to the calendar
+    
+    Args:
+        workout_id: ID of the workout to schedule
+        scheduled_date: Date to schedule the workout (YYYY-MM-DD format)
+        scheduled_time: Optional time to schedule the workout (HH:MM format, e.g., "09:00")
+    """
+    try:
+        # First, verify the workout exists
+        workout = garmin_client.get_workout_by_id(workout_id)
+        
+        if not workout:
+            return f"Workout with ID {workout_id} not found"
+        
+        # Build the datetime string for scheduling
+        if scheduled_time:
+            datetime_str = f"{scheduled_date}T{scheduled_time}:00"
+        else:
+            datetime_str = f"{scheduled_date}T00:00:00"
+        
+        # Use the workout service endpoint to schedule the workout
+        # The endpoint is typically: /workout-service/schedule/{workout_id}
+        url = f"/workout-service/schedule/{workout_id}"
+        
+        # Prepare the payload
+        payload = {
+            "scheduledDate": scheduled_date
+        }
+        if scheduled_time:
+            payload["scheduledTime"] = scheduled_time
+        
+        # Use garth.request to make a POST request
+        result = garmin_client.garth.request(
+            "POST",
+            "connectapi",
+            url,
+            json=payload,
+            api=True
+        )
+        
+        return f"Successfully scheduled workout {workout_id} for {scheduled_date}" + (f" at {scheduled_time}" if scheduled_time else "")
+    except Exception as e:
+        # If the direct API call doesn't work, try using GraphQL mutation
+        try:
+            # Alternative: Use GraphQL mutation if available
+            mutation = {
+                "query": f'mutation{{scheduleWorkout(workoutId:{workout_id}, scheduledDate:"{scheduled_date}"){{id}}}}'
+            }
+            result = garmin_client.query_garmin_graphql(mutation)
+            return f"Successfully scheduled workout {workout_id} for {scheduled_date}"
+        except Exception as e2:
+            return f"Error scheduling workout: {str(e)}. Alternative method also failed: {str(e2)}"
+
+@app.tool()
 async def get_race_predictions(startdate: str = None, enddate: str = None, _type: str = None) -> str:
     """Get race predictions for 5k, 10k, half marathon and marathon
     
